@@ -1,0 +1,711 @@
+	Hamming code
+
+#ifndef HAMMING_H
+#define HAMMING_H
+#include<stdio.h>
+#include<string.h>
+#include<stdlib.h>
+#define MAX 100
+typedef struct
+{
+    char data[MAX];
+    char code[MAX];
+    char received[MAX];
+    char decoded[MAX];
+    int dataBits;
+    int parityBits;
+    int totalBits;
+}Hamming;
+int powerOfTwo(int n);
+void inputData(Hamming *h);
+void calculateParity(Hamming *h);
+void generateCode(Hamming *h);
+void displayCode(Hamming *h);
+void writeEncodedFile(Hamming *h);
+void readReceived(Hamming *h);
+void addError(Hamming *h);
+void detectError(Hamming *h);
+void decode(Hamming *h);
+void writeDecodedFile(Hamming *h);
+void displayResult(Hamming *h);
+#endif
+
+#include "hamming.h"
+int powerOfTwo(int n)
+{
+    if (n == 1)
+    {
+        return 1;
+    }
+    while (n > 1)
+    {
+        if (n % 2 != 0)
+        {
+            return 0;
+        }
+        n = n / 2;
+    }
+    return 1;
+}
+void inputData(Hamming *h)
+{
+    FILE *fp;
+    printf("Enter Data : ");
+    scanf("%99s", h->data);
+    h->dataBits =
+        strlen(h->data);
+    {
+        int i;
+
+        for (i = 0;
+             i < h->dataBits;
+             i++)
+        {
+            if (h->data[i] != '0' &&
+                h->data[i] != '1')
+            {
+                printf("\nInvalid Data\n");
+                printf("Enter only 0 and 1.\n");
+                exit(1);
+            }
+        }
+    }
+
+    /*
+     * Write data to input.txt
+     */
+    fp = fopen(
+        "input.txt",
+        "w"
+    );
+
+    if (fp == NULL)
+    {
+        printf("File Error\n");
+        exit(1);
+    }
+
+    fprintf(
+        fp,
+        "%s",
+        h->data
+    );
+
+    fclose(fp);
+
+    printf(
+        "\nData stored in input.txt\n"
+    );
+}
+
+
+/*
+ * Calculate number of redundant bits
+ */
+void calculateParity(Hamming *h)
+{
+    int r = 0;
+
+    while (
+        (1 << r) <
+        (h->dataBits + r + 1)
+    )
+    {
+        r++;
+    }
+
+    h->parityBits = r;
+
+    h->totalBits =
+        h->dataBits +
+        h->parityBits;
+
+    printf(
+        "\nData Bits      : %d",
+        h->dataBits
+    );
+
+    printf(
+        "\nRedundant Bits : %d",
+        h->parityBits
+    );
+
+    printf(
+        "\nTotal Bits     : %d\n",
+        h->totalBits
+    );
+}
+
+
+/*
+ * Generate Hamming code
+ */
+void generateCode(Hamming *h)
+{
+    int i;
+    int j;
+    int dataIndex = 0;
+    int count;
+    int first;
+
+    /*
+     * Put data and empty parity positions
+     */
+    for (i = 1;
+         i <= h->totalBits;
+         i++)
+    {
+        if (powerOfTwo(i))
+        {
+            h->code[i] = '0';
+        }
+        else
+        {
+            h->code[i] =
+                h->data[dataIndex];
+
+            dataIndex++;
+        }
+    }
+
+    /*
+     * Calculate redundant bits
+     */
+    printf(
+        "\n------------ Redundant Bit Calculation ------------\n"
+    );
+
+    for (i = 0;
+         i < h->parityBits;
+         i++)
+    {
+        int r = (1 << i);
+
+        count = 0;
+        first = 1;
+
+        printf(
+            "\nR%d = ",
+            r
+        );
+
+        for (j = 1;
+             j <= h->totalBits;
+             j++)
+        {
+            if (
+                (j & r) != 0 &&
+                j != r
+            )
+            {
+                if (!first)
+                {
+                    printf(" ");
+                }
+
+                printf(
+                    "D%d",
+                    j
+                );
+
+                first = 0;
+
+                if (h->code[j] == '1')
+                {
+                    count++;
+                }
+            }
+        }
+
+        /*
+         * Even parity
+         */
+        if (count % 2 == 0)
+        {
+            h->code[r] = '0';
+        }
+        else
+        {
+            h->code[r] = '1';
+        }
+
+        printf(
+            " = %c",
+            h->code[r]
+        );
+    }
+
+    printf("\n");
+}
+
+
+/*
+ * Display Hamming code
+ *
+ * Printed from highest position to lowest
+ */
+void displayCode(Hamming *h)
+{
+    int i;
+
+    printf(
+        "\nHamming Code : "
+    );
+
+    for (i = h->totalBits;
+         i >= 1;
+         i--)
+    {
+        printf(
+            "%c",
+            h->code[i]
+        );
+    }
+
+    printf("\n");
+}
+
+
+/*
+ * Write encoded Hamming code
+ */
+void writeEncodedFile(Hamming *h)
+{
+    FILE *fp;
+
+    int i;
+
+    fp = fopen(
+        "encoded.txt",
+        "w"
+    );
+
+    if (fp == NULL)
+    {
+        printf(
+            "File Error\n"
+        );
+
+        exit(1);
+    }
+
+    for (i = h->totalBits;
+         i >= 1;
+         i--)
+    {
+        fprintf(
+            fp,
+            "%c",
+            h->code[i]
+        );
+    }
+
+    fclose(fp);
+
+    printf(
+        "\nEncoded code stored in encoded.txt\n"
+    );
+}
+
+
+/*
+ * Copy generated code to received code
+ */
+void readReceived(Hamming *h)
+{
+    int i;
+
+    for (i = 1;
+         i <= h->totalBits;
+         i++)
+    {
+        h->received[i] =
+            h->code[i];
+    }
+}
+
+
+/*
+ * User chooses transmission type
+ */
+void addError(Hamming *h)
+{
+    int choice;
+    int position;
+    int i;
+
+    printf(
+        "\n------------ TRANSMISSION ------------\n"
+    );
+
+    printf(
+        "1. Send Without Error\n"
+    );
+
+    printf(
+        "2. Send With Error\n"
+    );
+
+    printf(
+        "Enter Choice : "
+    );
+
+    scanf(
+        "%d",
+        &choice
+    );
+
+    if (choice == 1)
+    {
+        printf(
+            "\nCode Sent Without Error\n"
+        );
+
+        printf(
+            "\nReceived Code : "
+        );
+
+        for (i = h->totalBits;
+             i >= 1;
+             i--)
+        {
+            printf(
+                "%c",
+                h->received[i]
+            );
+        }
+
+        printf("\n");
+
+        return;
+    }
+
+    if (choice == 2)
+    {
+        /*
+         * Random error position
+         */
+        position =
+            (rand() %
+             h->totalBits) + 1;
+
+        /*
+         * Change bit
+         */
+        if (
+            h->received[position] ==
+            '0'
+        )
+        {
+            h->received[position] =
+                '1';
+        }
+        else
+        {
+            h->received[position] =
+                '0';
+        }
+
+        printf(
+            "\nError Introduced Successfully\n"
+        );
+
+        printf(
+            "Random Error Position : %d\n",
+            position
+        );
+
+        printf(
+            "\nReceived Code With Error : "
+        );
+
+        for (i = h->totalBits;
+             i >= 1;
+             i--)
+        {
+            printf(
+                "%c",
+                h->received[i]
+            );
+        }
+
+        printf("\n");
+
+        return;
+    }
+
+    printf(
+        "\nInvalid Choice\n"
+    );
+}
+
+
+/*
+ * Detect and correct error
+ */
+void detectError(Hamming *h)
+{
+    int i;
+    int j;
+    int r;
+    int count;
+    int first;
+
+    int errorPosition = 0;
+
+    printf(
+        "\n------------ ERROR DETECTION ------------\n"
+    );
+
+    for (i = 0;
+         i < h->parityBits;
+         i++)
+    {
+        r = (1 << i);
+
+        count = 0;
+        first = 1;
+
+        printf(
+            "\nR%d = ",
+            r
+        );
+
+        for (j = 1;
+             j <= h->totalBits;
+             j++)
+        {
+            if ((j & r) != 0)
+            {
+                /*
+                 * Do not print the parity
+                 * position itself.
+                 */
+                if (j != r)
+                {
+                    if (!first)
+                    {
+                        printf(" ");
+                    }
+
+                    printf(
+                        "D%d",
+                        j
+                    );
+
+                    first = 0;
+                }
+
+                /*
+                 * Count all bits including
+                 * the parity bit
+                 */
+                if (
+                    h->received[j] ==
+                    '1'
+                )
+                {
+                    count++;
+                }
+            }
+        }
+
+        /*
+         * Odd count means parity failure
+         */
+        if (count % 2 != 0)
+        {
+            errorPosition =
+                errorPosition + r;
+
+            printf(
+                " = 1"
+            );
+        }
+        else
+        {
+            printf(
+                " = 0"
+            );
+        }
+    }
+
+    printf("\n");
+
+    /*
+     * No error
+     */
+    if (errorPosition == 0)
+    {
+        printf(
+            "\nNo Error Found\n"
+        );
+
+        printf(
+            "Received Code is Correct\n"
+        );
+
+        return;
+    }
+
+    /*
+     * Error detected
+     */
+    printf(
+        "\nError Detected\n"
+    );
+
+    printf(
+        "Error Position Found : %d\n",
+        errorPosition
+    );
+
+    /*
+     * Correct error
+     */
+    if (
+        h->received[errorPosition] ==
+        '0'
+    )
+    {
+        h->received[errorPosition] =
+            '1';
+    }
+    else
+    {
+        h->received[errorPosition] =
+            '0';
+    }
+
+    printf(
+        "\nCorrected Code : "
+    );
+
+    for (i = h->totalBits;
+         i >= 1;
+         i--)
+    {
+        printf(
+            "%c",
+            h->received[i]
+        );
+    }
+
+    printf("\n");
+}
+
+
+/*
+ * Decode original data
+ */
+void decode(Hamming *h)
+{
+    int i;
+    int index = 0;
+
+    for (i = 1;
+         i <= h->totalBits;
+         i++)
+    {
+        /*
+         * Ignore parity positions
+         */
+        if (!powerOfTwo(i))
+        {
+            h->decoded[index] =
+                h->received[i];
+
+            index++;
+        }
+    }
+
+    h->decoded[index] =
+        '\0';
+}
+
+
+/*
+ * Write decoded data
+ */
+void writeDecodedFile(Hamming *h)
+{
+    FILE *fp;
+
+    fp = fopen(
+        "decoded.txt",
+        "w"
+    );
+
+    if (fp == NULL)
+    {
+        printf(
+            "File Error\n"
+        );
+
+        exit(1);
+    }
+
+    fprintf(
+        fp,
+        "%s",
+        h->decoded
+    );
+
+    fclose(fp);
+
+    printf(
+        "\nDecoded data stored in decoded.txt\n");
+}
+void displayResult(Hamming *h)
+{
+    printf(
+        "\n------------ RESULT ------------\n"
+    );
+
+    printf(
+        "Original Data : %s\n",
+        h->data
+    );
+
+    printf(
+        "Decoded Data  : %s\n",
+        h->decoded
+    );
+
+    if (
+        strcmp(
+            h->data,
+            h->decoded
+        ) == 0
+    )
+    {
+        printf(
+            "Data Matched  : YES\n"
+        );
+    }
+    else
+    {
+        printf(
+            "Data Matched  : NO\n"
+        );
+    }
+}
+
+
+#include "hamming.h"
+int main()
+{
+    Hamming *h=(Hamming*)malloc(sizeof(Hamming));
+    inputData(h);
+    calculateParity(h);
+    generateCode(h);
+    displayCode(h);
+    writeEncodedFile(h);
+    readReceived(h);
+    addError(h);
+    detectError(h);
+    decode(h);
+    writeDecodedFile(h);
+    displayResult(h);
+    return 0;
+}
