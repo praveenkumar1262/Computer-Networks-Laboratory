@@ -1,0 +1,337 @@
+SERVER:
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#define PORT 5000
+#define MAX_FRAMES 100
+void send_int(int sock, int value)
+{
+    send(sock, &value, sizeof(value), 0);
+}
+int receive_int(int sock)
+{
+    int value;
+    recv(sock, &value, sizeof(value), 0);
+    return value;
+}
+void goBackN(int sock)
+{
+    int n, window, lostFrame, lostACK, outOfOrder;
+    int base = 1;
+    int acked[MAX_FRAMES + 1];
+    int i;
+    n = receive_int(sock);
+    window = receive_int(sock);
+    lostFrame = receive_int(sock);
+    lostACK = receive_int(sock);
+    outOfOrder = receive_int(sock);
+    for (i = 0; i <= MAX_FRAMES; i++)
+    {
+        acked[i] = 0;
+    }
+    printf("\n=== GO-BACK-N ARQ STARTED ===\n");
+    while (base <= n)
+    {
+        int end = base + window - 1;
+        if (end > n)
+        {
+            end = n;
+        }
+        printf("\nCurrent Window: ");
+        for (i = base; i <= end; i++)
+        {
+            printf("[%d] ", i);
+        }
+        printf("\n");
+        for (i = base; i <= end; i++)
+        {
+            if (acked[i] == 1)
+            {
+                continue;
+            }
+            printf("Sending Frame %d\n", i);
+            if (i == lostFrame)
+            {
+                printf(">>> Frame %d LOST <<<\n", i);
+                send_int(sock, -2);
+                lostFrame = -1;
+                continue;
+            }
+            if (i != base)
+            {
+                printf(">>> Frame %d OUT OF ORDER -> DISCARDED <<<\n", i);
+                send_int(sock, -3);
+                continue;
+            }
+            if (i == lostACK)
+            {
+                printf(">>> ACK %d LOST <<<\n", i);
+                send_int(sock, -4);
+                lostACK = -1;
+                continue;
+            }
+            printf("Receiver accepted Frame %d | ACK %d sent\n", i, i);
+            send_int(sock, i);
+            acked[i] = 1;
+            base++;
+            usleep(200000);
+        }
+        if (base <= n && acked[base] == 0)
+        {
+            printf("*** TIMEOUT: Retransmitting from Frame %d ***\n", base);
+            send_int(sock, -5);
+        }
+    }
+    send_int(sock, -1);
+}
+void selectiveRepeat(int sock)
+{
+    int n, window, lostFrame, lostACK, outOfOrder;
+    int base = 1;
+    int received[MAX_FRAMES + 1];
+    int i;
+    n = receive_int(sock);
+    window = receive_int(sock);
+    lostFrame = receive_int(sock);
+    lostACK = receive_int(sock);
+    outOfOrder = receive_int(sock);
+    for (i = 0; i <= MAX_FRAMES; i++)
+    {
+        received[i] = 0;
+    }
+    printf("\n=== SELECTIVE REPEAT ARQ STARTED ===\n");
+    while (base <= n)
+    {
+        int end = base + window - 1;
+        if (end > n)
+        {
+            end = n;
+        }
+        for (i = base; i <= end; i++)
+        {
+            if (received[i] == 1)
+            {
+                continue;
+            }
+            printf("Sending Frame %d\n", i);
+            if (i == lostFrame)
+            {
+                printf(">>> Frame %d LOST <<<\n", i);
+                send_int(sock, -2);
+                lostFrame = -1;
+                continue;
+            }
+            if (i == lostACK)
+            {
+                printf(">>> ACK %d LOST <<<\n", i);
+                send_int(sock, -4);
+                received[i] = 1;
+                lostACK = -1;
+                continue;
+            }
+            printf("Frame %d accepted & buffered | ACK %d sent\n", i, i);
+            send_int(sock, i);
+            received[i] = 1;
+            usleep(200000);
+        }
+        while (base <= n && received[base] == 1)
+        {
+            base++;
+        }
+        if (base <= n && received[base] == 0)
+        {
+            printf("*** SR: Retransmitting ONLY Frame %d ***\n", base);
+            send_int(sock, -6);
+            send_int(sock, base);
+            received[base] = 1;
+            base++;
+        }
+    }
+    send_int(sock, -1);
+}
+int main()
+{
+    int server_socket;
+    int client_socket;
+    int choice;
+    struct sockaddr_in server_address;
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket < 0)
+    {
+        printf("Socket creation failed!\n");
+        return 1;
+    }
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(PORT);
+    server_address.sin_addr.s_addr = INADDR_ANY;
+    if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
+    {
+        printf("Bind failed!\n");
+        close(server_socket);
+        return 1;
+    }
+    if (listen(server_socket, 5) < 0)
+    {
+        printf("Listen failed!\n");
+        close(server_socket);
+        return 1;
+    }
+    printf("Server listening on port %d...\n", PORT);
+    client_socket = accept(server_socket, NULL, NULL);
+    if (client_socket < 0)
+    {
+        printf("Accept failed!\n");
+        close(server_socket);
+        return 1;
+    }
+    printf("Client connected successfully!\n");
+    while (1)
+    {
+        choice = receive_int(client_socket);
+
+        if (choice == 1)
+        {
+            goBackN(client_socket);
+        }
+        else if (choice == 2)
+        {
+            selectiveRepeat(client_socket);
+        }
+        else if (choice == 3)
+        {
+            printf("Client disconnected.\n");
+            break;
+        }
+    }
+    close(client_socket);
+    close(server_socket);
+    return 0;
+}
+
+
+Client:
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#define PORT 5000
+void send_int(int sock, int value)
+{
+    send(sock, &value, sizeof(value), 0);
+}
+int receive_int(int sock)
+{
+    int value;
+    recv(sock, &value, sizeof(value), 0);
+    return value;
+}
+void run_protocol(int sock)
+{
+    int n, window, lostFrame, lostACK, outOfOrder;
+    int event;
+    printf("\nEnter number of frames: ");
+    scanf("%d", &n);
+    printf("Enter window size: ");
+    scanf("%d", &window);
+    printf("Enter frame to lose (-1 for none): ");
+    scanf("%d", &lostFrame);
+    printf("Enter ACK to lose (-1 for none): ");
+    scanf("%d", &lostACK);
+    printf("Enter frame to arrive out-of-order (-1 for none): ");
+    scanf("%d", &outOfOrder);
+    send_int(sock, n);
+    send_int(sock, window);
+    send_int(sock, lostFrame);
+    send_int(sock, lostACK);
+    send_int(sock, outOfOrder);
+    printf("\nStarting simulation...\n\n");
+    while (1)
+    {
+        event = receive_int(sock);
+        if (event == -1)
+        {
+            printf("\n[COMPLETE] All frames successfully acknowledged.\n");
+            break;
+        }
+        else if (event == -2)
+        {
+            printf("[EVENT] Frame loss detected.\n");
+        }
+        else if (event == -3)
+        {
+            printf("[EVENT] Out-of-order frame discarded.\n");
+        }
+        else if (event == -4)
+        {
+            printf("[EVENT] ACK loss detected.\n");
+        }
+        else if (event == -5)
+        {
+            printf("[EVENT] Timeout -> Go-Back-N Retransmission started.\n");
+        }
+        else if (event == -6)
+        {
+            printf("[EVENT] Selective Retransmission started.\n");
+        }
+        else if (event > 0)
+        {
+            printf("[ACK] Received ACK %d\n", event);
+        }
+    }
+}
+int main()
+{
+    int client_socket;
+    int choice;
+    struct sockaddr_in server_address;
+    client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket < 0)
+    {
+        printf("Socket creation failed!\n");
+        return 1;
+    }
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(PORT);
+    inet_pton(AF_INET, "127.0.0.1", &server_address.sin_addr);
+    if (connect(client_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
+    {
+        printf("Connection failed!\n");
+        close(client_socket);
+        return 1;
+    }
+    printf("\nConnected to ARQ Server!\n");
+    while (1)
+    {
+        printf("\n================ MENU ================\n");
+        printf("1. Go-Back-N\n");
+        printf("2. Selective Repeat\n");
+        printf("3. Exit\n");
+        printf("======================================\n");
+        printf("Enter choice: ");
+        scanf("%d", &choice);
+        send_int(client_socket, choice);
+        if (choice == 1 || choice == 2)
+        {
+            run_protocol(client_socket);
+        }
+        else if (choice == 3)
+        {
+            printf("Exiting...\n");
+            break;
+        }
+        else
+        {
+            printf("Invalid choice!\n");
+        }
+    }
+    close(client_socket);
+    return 0;
+}
