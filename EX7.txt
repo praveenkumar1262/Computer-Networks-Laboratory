@@ -1,0 +1,263 @@
+	Client.c
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <string.h>
+#include <ctype.h>
+
+#define PORT 8080
+
+int main() {
+    struct sockaddr_in serveraddress, clientaddress;
+    socklen_t addrlen = sizeof(clientaddress);
+
+    int sockid = socket(PF_INET, SOCK_DGRAM, 0);
+
+    if (sockid < 0) {
+        printf("Socket creation failed\n");
+        return 0;
+    }
+
+    printf("UDP Socket created successfully\n");
+
+    memset(&serveraddress, 0, sizeof(serveraddress));
+    serveraddress.sin_family = AF_INET;
+    serveraddress.sin_addr.s_addr = INADDR_ANY;
+    serveraddress.sin_port = htons(PORT);
+
+    if (bind(sockid, (struct sockaddr*)&serveraddress,
+             sizeof(serveraddress)) < 0) {
+        printf("Binding failed\n");
+        close(sockid);
+        return 0;
+    }
+
+    printf("Server listening on port %d...\n", PORT);
+
+    char *file[] = {"amazon", "yahoo", "college"};
+
+    char *filename[] = {
+        "amazon.txt",
+        "yahoo.txt",
+        "college.txt"
+    };
+
+    char str[100];
+    char ip[500];
+
+    while (1) {
+        memset(str, 0, sizeof(str));
+
+        int count1 = recvfrom(sockid, str, sizeof(str) - 1, 0,
+                              (struct sockaddr*)&clientaddress,
+                              &addrlen);
+
+        if (count1 < 0)
+            continue;
+
+        str[count1] = '\0';
+
+        if (strcmp(str, "exit") == 0)
+            break;
+
+        printf("Received request for domain: %s\n", str);
+
+        char secondarydomain[50] = {0};
+        int index = 0;
+        int find = -1;
+
+        for (int i = 0; str[i] != '\0'; i++) {
+            if (str[i] == '.') {
+                find = i + 1;
+                break;
+            }
+        }
+
+        if (find != -1) {
+            while (str[find] != '.' &&
+                   str[find] != '\0' &&
+                   index < 49) {
+                secondarydomain[index++] = str[find++];
+            }
+
+            secondarydomain[index] = '\0';
+        }
+
+        printf("Secondary domain: %s\n", secondarydomain);
+
+        int find2 = -1;
+
+        for (int i = 0; i < 3; i++) {
+            if (strcmp(file[i], secondarydomain) == 0) {
+                find2 = i;
+                break;
+            }
+        }
+
+        if (find2 == -1) {
+            strcpy(ip, "Domain Name not found");
+        }
+        else {
+
+            FILE *fp = fopen(filename[find2], "r");
+
+            if (fp == NULL) {
+                strcpy(ip, "Database Error");
+            }
+            else {
+
+                char line[200];
+                int hfind = 0;
+
+                while (fgets(line, sizeof(line), fp) != NULL) {
+
+                    line[strcspn(line, "\r\n")] = '\0';
+
+                    char *host = line;
+
+                    while (isspace((unsigned char)*host))
+                        host++;
+
+                    char *comma = strchr(host, ',');
+
+                    if (comma == NULL)
+                        continue;
+
+                    *comma = '\0';
+
+                    char *end = host + strlen(host);
+
+                    while (end > host &&
+                           isspace((unsigned char)end[-1])) {
+                        *--end = '\0';
+                    }
+
+                    if (strcmp(host, str) == 0) {
+
+                        char *address = comma + 1;
+
+                        while (isspace((unsigned char)*address))
+                            address++;
+
+                        strcpy(ip, address);
+
+                        hfind = 1;
+                        break;
+                    }
+                }
+
+                fclose(fp);
+
+                if (hfind == 0)
+                    strcpy(ip, "Host Not Found");
+            }
+        }
+
+        printf("Server response: %s\n", ip);
+
+        sendto(sockid, ip, strlen(ip) + 1, 0,
+               (struct sockaddr*)&clientaddress, addrlen);
+    }
+
+    close(sockid);
+
+    return 0;
+}
+
+	Server.c
+
+
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <string.h>
+#include <unistd.h>
+
+#define PORT 8080
+
+int main() {
+
+    struct sockaddr_in serveraddress;
+    socklen_t addrlen = sizeof(serveraddress);
+
+    int socketid = socket(PF_INET, SOCK_DGRAM, 0);
+
+    if (socketid < 0) {
+        printf("Socket creation failed\n");
+        return 0;
+    }
+
+    memset(&serveraddress, 0, sizeof(serveraddress));
+
+    serveraddress.sin_family = AF_INET;
+    serveraddress.sin_addr.s_addr = inet_addr("127.0.0.1");
+    serveraddress.sin_port = htons(PORT);
+
+    char str[100];
+    char ip[500];
+
+    do {
+
+        printf("Enter the Address: ");
+        scanf("%99s", str);
+
+        sendto(socketid, str, strlen(str) + 1, 0,
+               (struct sockaddr*)&serveraddress,
+               addrlen);
+
+        if (strcmp(str, "exit") == 0) {
+
+            printf("Client terminated\n");
+            break;
+        }
+
+        memset(ip, 0, sizeof(ip));
+
+        int n = recvfrom(socketid, ip, sizeof(ip) - 1, 0,
+                         (struct sockaddr*)&serveraddress,
+                         &addrlen);
+
+        if (n >= 0) {
+
+            ip[n] = '\0';
+
+            printf("IP: %s\n", ip);
+        }
+
+    } while (1);
+
+    close(socketid);
+
+    return 0;
+}
+
+ ./rec
+
+Enter the Address: www.amazon.com
+IP: 192.0.2.10
+Enter the Address: www.yahoo.com
+IP: 192.0.2.20
+Enter the Address: www.college.com
+IP: 192.0.2.30
+Enter the Address: www.google.com
+IP: Domain Name not found
+Enter the Address: exit
+Client terminated
+
+ ./send
+
+UDP Socket created successfully
+Server listening on port 8080...
+Received request for domain: www.amazon.com
+Secondary domain: amazon
+Server response: 192.0.2.10
+Received request for domain: www.yahoo.com
+Secondary domain: yahoo
+Server response: 192.0.2.20
+Received request for domain: www.college.com
+Secondary domain: college
+Server response: 192.0.2.30
+Received request for domain: www.google.com
+Secondary domain: google
+Server response: Domain Name not found
