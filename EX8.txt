@@ -1,0 +1,238 @@
+	Client.c
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <sys/wait.h>
+#include <signal.h>
+
+#define PORT 4545
+
+int main() {
+    struct sockaddr_in serveraddress, clientaddress;
+    socklen_t addresslength;
+
+    int sockid = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockid < 0) {
+        printf("Socket was not created successfully\n");
+        return 1;
+    }
+
+    int opt = 1;
+    setsockopt(sockid, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    memset(&serveraddress, 0, sizeof(serveraddress));
+    serveraddress.sin_family = AF_INET;
+    serveraddress.sin_addr.s_addr = inet_addr("127.0.0.1");
+    serveraddress.sin_port = htons(PORT);
+
+    if (bind(sockid, (struct sockaddr *)&serveraddress, sizeof(serveraddress)) < 0) {
+        perror("Binding failed");
+        close(sockid);
+        return 1;
+    }
+
+    if (listen(sockid, 5) < 0) {
+        perror("Not listening");
+        close(sockid);
+        return 1;
+    }
+
+    printf("Server is listening on port %d...\n", PORT);
+
+    while (1) {
+        addresslength = sizeof(clientaddress);
+        int sock = accept(sockid, (struct sockaddr *)&clientaddress, &addresslength);
+
+        if (sock < 0)
+            continue;
+
+        printf("Client connected successfully!\n");
+
+        int p1 = fork();
+
+        if (p1 < 0) {
+            close(sock);
+            continue;
+        }
+
+        if (p1 == 0) {
+            close(sockid);
+
+            char s[50];
+
+            while (1) {
+                fd_set readfds;
+                FD_ZERO(&readfds);
+                FD_SET(sock, &readfds);
+                FD_SET(STDIN_FILENO, &readfds);
+
+                if (select((sock > STDIN_FILENO ? sock : STDIN_FILENO) + 1,
+                           &readfds, NULL, NULL, NULL) < 0)
+                    break;
+
+                if (FD_ISSET(sock, &readfds)) {
+                    memset(s, 0, sizeof(s));
+                    int count1 = recv(sock, s, sizeof(s) - 1, 0);
+
+                    if (count1 <= 0)
+                        break;
+
+                    s[count1] = '\0';
+                    printf("\nReceived from client: %s\n", s);
+
+                    if (strcmp(s, "exit") == 0){
+                            break;
+                    }
+                }
+
+                if (FD_ISSET(STDIN_FILENO, &readfds)) {
+                    if (scanf("%49s", s) != 1)
+                        break;
+
+                    if (send(sock, s, strlen(s), 0) <= 0)
+                        break;
+
+                    if (strcmp(s, "exit") == 0)
+                        break;
+                }
+            }
+
+            close(sock);
+            exit(0);
+        } else {
+            close(sock);
+            waitpid(p1, NULL, 0);
+            printf("Client disconnected. Waiting for next client...\n");
+        }
+    }
+
+    close(sockid);
+    return 0;
+}
+
+	Server.c
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <sys/select.h>
+#include <sys/wait.h>
+
+#define PORT 4545
+
+int main() {
+    struct sockaddr_in serveraddress;
+
+    int sockid = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockid < 0) {
+        printf("Socket creation failed\n");
+        return 1;
+    }
+
+    memset(&serveraddress, 0, sizeof(serveraddress));
+    serveraddress.sin_family = AF_INET;
+    serveraddress.sin_addr.s_addr = inet_addr("127.0.0.1");
+    serveraddress.sin_port = htons(PORT);
+
+    if (connect(sockid, (struct sockaddr *)&serveraddress, sizeof(serveraddress)) < 0) {
+        perror("Connection to server failed");
+        close(sockid);
+        return 1;
+    }
+
+    printf("Connected to server successfully!\n");
+
+    int p1 = fork();
+
+    if (p1 < 0) {
+        printf("Fork failed\n");
+        close(sockid);
+        return 1;
+    }
+
+    if (p1 == 0) {
+        char s[50];
+
+        while (1) {
+            memset(s, 0, sizeof(s));
+            int count = recv(sockid, s, sizeof(s) - 1, 0);
+
+            if (count <= 0)
+                break;
+
+            s[count] = '\0';
+            printf("\nReceived from server: %s\n", s);
+
+            if (strcmp(s, "exit") == 0)
+                break;
+        }
+
+        kill(getppid(), SIGTERM);
+        close(sockid);
+        exit(0);
+    } else {
+        char s[50];
+
+        while (1) {
+            printf("Enter message to send to server (or 'exit'): ");
+            fflush(stdout);
+
+            if (scanf("%49s", s) != 1)
+                break;
+
+            if (send(sockid, s, strlen(s), 0) <= 0)
+                break;
+
+            if (strcmp(s, "exit") == 0)
+                break;
+        }
+
+        close(sockid);
+        waitpid(p1, NULL, 0);
+    }
+
+    return 0;
+}
+
+
+./rec
+
+Connected to server successfully!
+Enter message to send to server (or 'exit'): hi
+Enter message to send to server (or 'exit'): welcome
+Enter message to send to server (or 'exit'): exit
+Terminated
+
+./rec
+
+Connected to server successfully!
+Enter message to send to server (or 'exit'): hello
+Enter message to send to server (or 'exit'): thankyou
+Enter message to send to server (or 'exit'): exit
+Terminated
+
+./send
+
+Server is listening on port 4545...
+Client connected successfully!
+
+Received from client: hi
+
+Received from client: welcome
+
+Received from client: exit
+Client disconnected. Waiting for next client...
+Client connected successfully!
+
+Received from client: hello
+
+Received from client: thankyou
+
+Received from client: exit
+Client disconnected. Waiting for next client...
+
