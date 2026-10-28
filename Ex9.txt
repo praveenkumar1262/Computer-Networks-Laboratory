@@ -1,0 +1,300 @@
+server
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 4096
+
+static int send_all(int sock, const void *buf, int n) {
+    int sent = 0;
+    while (sent < n) {
+        int r = send(sock, (const char *)buf + sent, n - sent, 0);
+        if (r <= 0) return -1;
+        sent += r;
+    }
+    return 0;
+}
+
+static int recv_all(int sock, void *buf, int n) {
+    int got = 0;
+    while (got < n) {
+        int r = recv(sock, (char *)buf + got, n - got, 0);
+        if (r <= 0) return -1;
+        got += r;
+    }
+    return 0;
+}
+
+static void send_status(int sock, char c) { send_all(sock, &c, 1); }
+
+
+void handle_store(int sock, char *fname, const char *ip) {
+    FILE *fp = fopen(fname, "wb");
+    if (!fp) {
+        send_status(sock, 'N');
+        printf("  %-15s  error     cannot create %s\n", ip, fname);
+        return;
+    }
+    send_status(sock, 'Y');
+
+    char buf[BUFFER_SIZE];
+    int n;
+    while (recv_all(sock, &n, sizeof(int)) == 0 && n > 0 && n <= BUFFER_SIZE) {
+        if (recv_all(sock, buf, n) < 0) break;
+        fwrite(buf, 1, n, fp);
+    }
+
+    fclose(fp);
+    printf("  %-15s  stored    %s\n", ip, fname);
+    send_status(sock, 'Y');
+}
+
+void handle_retrieve(int sock, char *fname, const char *ip) {
+    FILE *fp = fopen(fname, "rb");
+    if (!fp) {
+        send_status(sock, 'N');
+        printf("  %-15s  error     %s not found\n", ip, fname);
+        return;
+    }
+    send_status(sock, 'Y');
+
+    char buf[BUFFER_SIZE];
+    int n;
+    while ((n = fread(buf, 1, BUFFER_SIZE, fp)) > 0) {
+        send_all(sock, &n, sizeof(int));
+        send_all(sock, buf, n);
+    }
+    n = 0;
+    send_all(sock, &n, sizeof(int));
+
+    fclose(fp);
+    printf("  %-15s  sent      %s\n", ip, fname);
+}
+
+void handle_client(int sock, const char *ip) {
+    char buf[BUFFER_SIZE], cmd[32], fname[256];
+
+    while (1) {
+        memset(buf, 0, sizeof(buf));
+        if (recv(sock, buf, sizeof(buf) - 1, 0) <= 0) break;
+
+        if (sscanf(buf, "%31s %255s", cmd, fname) > 0) {
+            if (!strcmp(cmd, "STORE")) handle_store(sock, fname, ip);
+            else if (!strcmp(cmd, "RETRIEVE")) handle_retrieve(sock, fname, ip);
+            else if (!strcmp(cmd, "EXIT")) break;
+        }
+    }
+    printf("  %-15s  disconnected\n", ip);
+    close(sock);
+    exit(0);
+}
+
+int main() {
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0), client_socket;
+    struct sockaddr_in addr = { .sin_family = AF_INET, .sin_addr.s_addr = INADDR_ANY, .sin_port = htons(PORT) };
+    int opt = 1;
+
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+        return 1;
+    }
+    listen(server_fd, 5);
+
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    printf("listening on :%d\n\n", PORT);
+
+    struct sockaddr_in caddr;
+    socklen_t clen = sizeof(caddr);
+    while ((client_socket = accept(server_fd, (struct sockaddr *)&caddr, &clen)) >= 0) {
+        char ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &caddr.sin_addr, ip, sizeof(ip));
+        printf("  %-15s  connected\n", ip);
+        if (fork() == 0) {
+            close(server_fd);
+            handle_client(client_socket, ip);
+        }
+        close(client_socket);
+        clen = sizeof(caddr);
+    }
+    return 0;
+}
+
+client
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 4096
+#define DEFAULT_IP "127.0.0.1"
+
+static int send_all(int sock, const void *buf, int n) {
+    int sent = 0;
+    while (sent < n) {
+        int r = send(sock, (const char *)buf + sent, n - sent, 0);
+        if (r <= 0) return -1;
+        sent += r;
+    }
+    return 0;
+}
+
+static int recv_all(int sock, void *buf, int n) {
+    int got = 0;
+    while (got < n) {
+        int r = recv(sock, (char *)buf + got, n - got, 0);
+        if (r <= 0) return -1;
+        got += r;
+    }
+    return 0;
+}
+
+
+void upload_file(int sock, char *fname) {
+    FILE *fp = fopen(fname, "rb");
+    if (!fp) {
+        printf("  error: '%s' not found locally\n", fname);
+        return;
+    }
+
+    char buf[BUFFER_SIZE], status;
+    snprintf(buf, sizeof(buf), "STORE %s", fname);
+    send(sock, buf, strlen(buf), 0);
+
+    if (recv_all(sock, &status, 1) < 0 || status != 'Y') {
+        printf("  error: server rejected '%s'\n", fname);
+        fclose(fp);
+        return;
+    }
+
+    int n;
+    while ((n = fread(buf, 1, BUFFER_SIZE, fp)) > 0) {
+        send_all(sock, &n, sizeof(int));
+        send_all(sock, buf, n);
+    }
+    n = 0;
+    send_all(sock, &n, sizeof(int));
+    fclose(fp);
+
+    if (recv_all(sock, &status, 1) == 0 && status == 'Y')
+        printf("  uploaded %s\n", fname);
+    else
+        printf("  error: upload failed\n");
+}
+
+void download_file(int sock, char *fname) {
+    char buf[BUFFER_SIZE], status;
+    snprintf(buf, sizeof(buf), "RETRIEVE %s", fname);
+    send(sock, buf, strlen(buf), 0);
+
+    if (recv_all(sock, &status, 1) < 0 || status != 'Y') {
+        printf("  error: '%s' not found on server\n", fname);
+        return;
+    }
+
+    FILE *fp = fopen(fname, "wb");
+    if (!fp) {
+        printf("  error: cannot write '%s'\n", fname);
+        return;
+    }
+
+    int n;
+    while (recv_all(sock, &n, sizeof(int)) == 0 && n > 0 && n <= BUFFER_SIZE) {
+        if (recv_all(sock, buf, n) < 0) break;
+        fwrite(buf, 1, n, fp);
+    }
+
+    fclose(fp);
+    printf("  downloaded %s\n", fname);
+}
+
+int main(int argc, char *argv[]) {
+    const char *server_ip = (argc > 1) ? argv[1] : DEFAULT_IP;
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in serv_addr = { .sin_family = AF_INET, .sin_port = htons(PORT) };
+
+    if (inet_pton(AF_INET, server_ip, &serv_addr.sin_addr) != 1) {
+        printf("invalid ip: %s\n", server_ip);
+        return 1;
+    }
+
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        printf("connection failed\n");
+        return 1;
+    }
+
+    printf("connected to %s:%d\n\n", server_ip, PORT);
+    printf("  1  store\n");
+    printf("  2  retrieve\n");
+    printf("  3  exit\n");
+
+    char input[BUFFER_SIZE], fname[256];
+    while (1) {
+        printf("\n> ");
+        fflush(stdout);
+
+        if (!fgets(input, sizeof(input), stdin)) break;
+        int choice = atoi(input);
+
+        if (choice == 3) {
+            send(sock, "EXIT", 4, 0);
+            break;
+        }
+        if (choice != 1 && choice != 2) {
+            printf("  enter 1, 2 or 3\n");
+            continue;
+        }
+
+        printf("  file: ");
+        fflush(stdout);
+        if (!fgets(fname, sizeof(fname), stdin)) break;
+        fname[strcspn(fname, "\r\n")] = '\0';
+        if (fname[0] == '\0') {
+            printf("  error: no file name\n");
+            continue;
+        }
+
+        if (choice == 1) upload_file(sock, fname);
+        else             download_file(sock, fname);
+    }
+
+    close(sock);
+    printf("bye\n");
+    return 0;
+}
+
+
+~/ftpserver$ ./ser
+listening on :8080
+
+  127.0.0.1        connected
+  127.0.0.1        stored    test.txt
+  127.0.0.1        sent      test2.txt
+  127.0.0.1        disconnected
+
+/cn/ex9$ ./cli
+connected to 127.0.0.1:8080
+
+  1  store
+  2  retrieve
+  3  exit
+
+> 1
+  file: test.txt
+  uploaded test.txt
+
+> 2
+  file: test2.txt
+  downloaded test2.txt
+
+> 3
+bye
